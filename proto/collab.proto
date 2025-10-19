@@ -1,0 +1,120 @@
+syntax = "proto3";
+package collab;
+
+// ---------- Messages ----------
+message Empty {}
+
+message LoginRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message LoginResponse {
+  bool ok = 1;
+  string token = 2; // JWT or session token (simple string)
+  string message = 3;
+}
+
+message LogoutRequest {
+  string token = 1;
+}
+
+message Status {
+  bool ok = 1;
+  string message = 2;
+  int32 new_version = 3;
+}
+
+message GetRequest {
+  string token = 1;
+  string doc_id = 2;
+}
+
+message GetResponse {
+  bool ok = 1;
+  string content = 2;
+  int32 version = 3;
+  string message = 4;
+}
+
+message PostRequest {
+  string token = 1;
+  string doc_id = 2;
+  string content = 3;       // full content for simplicity
+  string lock_token = 4;    // required if doc is locked
+  bool ask_llm = 5;         // if true, server will call LLM for suggestion
+  int32 base_version = 6;   // optimistic versioning (optional)
+}
+
+message PostResponse {
+  bool ok = 1;
+  string message = 2;
+  int32 new_version = 3;
+  string llm_suggestion = 4; // optional
+}
+
+message LockRequest {
+  string token = 1;
+  string doc_id = 2;
+}
+
+message LockResponse {
+  bool ok = 1;
+  string lock_token = 2;
+  int64 expires_at = 3; // epoch seconds
+  string message = 4;
+}
+
+message UnlockRequest {
+  string token = 1;
+  string doc_id = 2;
+  string lock_token = 3;
+}
+
+message HeartbeatRequest {
+  string token = 1;
+}
+
+message PresenceUpdate {
+  string username = 1;
+  bool online = 2;
+  int64 last_seen = 3;
+}
+
+// LLM service messages
+message LLMRequest {
+  string request_id = 1;
+  string query = 2;
+  string context = 3;
+}
+
+message LLMResponse {
+  string request_id = 1;
+  string answer = 2;
+}
+
+// ---------- Services ----------
+service ClientService {
+  rpc Login(LoginRequest) returns (LoginResponse);
+  rpc Logout(LogoutRequest) returns (Status);
+
+  rpc Get(GetRequest) returns (GetResponse);
+  rpc Post(PostRequest) returns (PostResponse);
+
+  rpc Lock(LockRequest) returns (LockResponse);
+  rpc Unlock(UnlockRequest) returns (Status);
+
+  // server-streaming of presence events; client calls and keeps the stream open
+  rpc SubscribePresence(HeartbeatRequest) returns (stream PresenceUpdate);
+
+  // simple heartbeat to update last_seen
+  rpc Heartbeat(HeartbeatRequest) returns (Status);
+
+  // health check
+  rpc Health(Empty) returns (Status);
+}
+
+service LLMService {
+  rpc GetLLMAnswer(LLMRequest) returns (LLMResponse);
+}
+
