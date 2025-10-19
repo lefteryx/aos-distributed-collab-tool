@@ -1,0 +1,5 @@
+.python-version
+*__pychache__*
+*.pyc
+
+digest.txt
