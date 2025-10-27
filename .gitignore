@@ -1,5 +1,7 @@
 .python-version
 *__pychache__*
 *.pyc
+**_pb2*
+uv.lock
 
 digest.txt
