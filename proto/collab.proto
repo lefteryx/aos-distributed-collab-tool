@@ -86,11 +86,40 @@ message LLMRequest {
   string request_id = 1;
   string query = 2;
   string context = 3;
+  string mode = 4;
 }
 
 message LLMResponse {
   string request_id = 1;
   string answer = 2;
+}
+
+message AskSuggestionRequest {
+  string token = 1;
+  string doc_id = 2;
+  string mode = 3;
+  string prompt = 4;
+}
+
+message AskSuggestionResponse {
+  bool ok = 1;
+  int32 suggestion_id = 2;
+  string message = 3;
+  string suggestion_preview = 4;
+  string suggestion_text = 5;
+}
+
+
+message ApplySuggestionRequest {
+  string token = 1;
+  int32 suggestion_id = 2;
+  bool accept = 3;
+}
+
+message ApplySuggestionResponse {
+  bool ok = 1;
+  string message = 2;
+  int32 new_version = 3;
 }
 
 // ---------- Services ----------
@@ -112,9 +141,12 @@ service ClientService {
 
   // health check
   rpc Health(Empty) returns (Status);
+
+  // suggestion flow
+  rpc AskSuggestion(AskSuggestionRequest) returns (AskSuggestionResponse);
+  rpc ApplySuggestion(ApplySuggestionRequest) returns (ApplySuggestionResponse);
 }
 
 service LLMService {
   rpc GetLLMAnswer(LLMRequest) returns (LLMResponse);
 }
-

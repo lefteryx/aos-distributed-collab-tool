@@ -22,10 +22,14 @@ DOCUMENTS = {
 PRESENCE = {}  # username -> last_seen (epoch)
 PRESENCE_SUBSCRIBERS = []  # list of asyncio.Queue()
 
+SUGGESTIONS = {}
+SUGGESTION_COUNTER = 1
+SUGGESTION_LOCK = asyncio.Lock()
+
 # util jwt
 def issue_token(username):
     now = int(time.time())
-    payload = {"sub": username, "iat": now, "exp": now + 3600}
+    payload = {"sub": username, "iat": now, "exp": now + 3600, "jti": str(uuid.uuid4())}
     token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGO)
     TOKENS[token] = username
     return token
@@ -33,11 +37,9 @@ def issue_token(username):
 def verify_token(token):
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGO])
-        username = payload.get("sub")
-        # optional: check in TOKENS mapping for logout
         if token not in TOKENS:
             raise Exception("token not found (maybe logged out)")
-        return username
+        return TOKENS[token]
     except Exception as e:
         raise
 
@@ -50,7 +52,7 @@ async def lock_gc_loop():
             if lock and lock["expires_at"] <= now:
                 print(f"[LOCK EXPIRE] {doc_id} lock expired for {lock['owner']}")
                 doc["lock"] = None
-                await broadcast_presence_update(lock["owner"], online=True)  # optional notify
+                await broadcast_presence_update(lock["owner"], online=True)
         await asyncio.sleep(1)
 
 # presence broadcast helper
@@ -65,10 +67,10 @@ async def broadcast_presence_update(username=None, online=True):
             pass
 
 # LLM call helper (calls separate LLM server)
-async def ask_llm(query, context=""):
+async def ask_llm(query, mode="rewrite"):
     async with grpc.aio.insecure_channel("localhost:50061") as ch:
         stub = collab_pb2_grpc.LLMServiceStub(ch)
-        req = collab_pb2.LLMRequest(request_id=str(uuid.uuid4()), query=query, context=context)
+        req = collab_pb2.LLMRequest(request_id=str(uuid.uuid4()), query=query, context="", mode=mode)
         resp = await stub.GetLLMAnswer(req)
         return resp.answer
 
@@ -117,11 +119,13 @@ class ClientServicer(collab_pb2_grpc.ClientServiceServicer):
         doc = DOCUMENTS.get(doc_id)
         if not doc:
             return collab_pb2.PostResponse(ok=False, message="doc not found")
-        # if doc locked, lock_token must match
+        # if doc locked, lock_token must match and owner must match
         lock = doc.get("lock")
         if lock:
             if request.lock_token != lock["token"]:
                 return collab_pb2.PostResponse(ok=False, message="lock required or invalid lock_token")
+            if user != lock["owner"]:
+                return collab_pb2.PostResponse(ok=False, message="not lock owner")
             # refresh lock expiry
             lock["expires_at"] = time.time() + LOCK_TTL
         else:
@@ -135,7 +139,7 @@ class ClientServicer(collab_pb2_grpc.ClientServiceServicer):
         if request.ask_llm:
             # call llm (non-blocking)
             try:
-                llm_suggestion = await ask_llm(query=request.content, context=doc["content"])
+                llm_suggestion = await ask_llm(query=request.content, mode="rewrite")
             except Exception as e:
                 llm_suggestion = f"LLM error: {e}"
         return collab_pb2.PostResponse(ok=True, message="updated", new_version=doc["version"], llm_suggestion=llm_suggestion)
@@ -211,6 +215,82 @@ class ClientServicer(collab_pb2_grpc.ClientServiceServicer):
         await broadcast_presence_update(username=user, online=True)
         return collab_pb2.Status(ok=True, message="heartbeat ok")
 
+    async def AskSuggestion(self, request, context):
+        try:
+            user = verify_token(request.token)
+        except Exception:
+            return collab_pb2.AskSuggestionResponse(ok=False, message="auth failed", suggestion_id=0)
+
+        doc_id = request.doc_id
+        doc = DOCUMENTS.get(doc_id)
+        if not doc:
+            return collab_pb2.AskSuggestionResponse(ok=False, message="doc not found", suggestion_id=0)
+
+        try:
+            suggestion_text = await ask_llm(query=request.prompt, mode=request.mode or "rewrite")
+        except Exception as e:
+            return collab_pb2.AskSuggestionResponse(ok=False, message=f"LLM error: {e}", suggestion_id=0)
+
+        global SUGGESTION_COUNTER
+        async with SUGGESTION_LOCK:
+            sid = SUGGESTION_COUNTER
+            SUGGESTION_COUNTER += 1
+            SUGGESTIONS[sid] = {
+                "id": sid,
+                "doc_id": doc_id,
+                "mode": request.mode or "rewrite",
+                "prompt": request.prompt,
+                "suggestion_text": suggestion_text,
+                "base_version": doc["version"],
+                "author": user,
+                "created_at": int(time.time()),
+                "status": "pending"
+            }
+
+        preview = suggestion_text[:200].replace("\n", " ")
+        return collab_pb2.AskSuggestionResponse(
+            ok=True, 
+            suggestion_id=sid, 
+            message="suggestion created",
+            suggestion_preview=preview,
+            suggestion_text=suggestion_text,
+        )
+    
+    async def ApplySuggestion(self, request, context):
+        try:
+            user = verify_token(request.token)
+        except Exception:
+            return collab_pb2.ApplySuggestionResponse(ok=False, message="auth failed", new_version=0)
+
+        sid = request.suggestion_id
+        suggestion = SUGGESTIONS.get(sid)
+        if not suggestion:
+            return collab_pb2.ApplySuggestionResponse(ok=False, message="suggestion not found", new_version=0)
+
+        if suggestion["status"] != "pending":
+            return collab_pb2.ApplySuggestionResponse(ok=False, message=f"already {suggestion['status']}", new_version=0)
+
+        doc = DOCUMENTS.get(suggestion["doc_id"])
+        if not doc:
+            return collab_pb2.ApplySuggestionResponse(ok=False, message="doc not found", new_version=0)
+
+        if request.accept:
+            if suggestion["base_version"] != doc["version"]:
+                suggestion["status"] = "stale"
+                return collab_pb2.ApplySuggestionResponse(ok=False, message="version conflict, suggestion stale", new_version=doc["version"])
+            doc["content"] = suggestion["suggestion_text"]
+            doc["version"] += 1
+            suggestion["status"] = "accepted"
+            suggestion["applied_by"] = user
+            suggestion["applied_at"] = int(time.time())
+            await broadcast_presence_update(username=user, online=True)
+            return collab_pb2.ApplySuggestionResponse(ok=True, message="suggestion applied", new_version=doc["version"])
+        else:
+            suggestion["status"] = "rejected"
+            suggestion["rejected_by"] = user
+            suggestion["rejected_at"] = int(time.time())
+            return collab_pb2.ApplySuggestionResponse(ok=True, message="suggestion rejected", new_version=doc["version"])
+
 
 async def serve():
     server = grpc.aio.server()
@@ -224,4 +304,3 @@ async def serve():
 
 if __name__ == "__main__":
     asyncio.run(serve())
-
