@@ -1,11 +1,14 @@
-# Distributed Real-time Collaboration Platform — Milestone 1
+# Distributed Real-time Collaboration Platform
 
 **Author:** Yatharth Singh  
 **Project:** Distributed Real-time Collaboration Platform (AOS course - CS G623)  
 
 ---
 
-## Summary (Milestone 1)
+## Summary
+
+The system simulates a simplified version of tools like Google Docs, where multiple clients can collaboratively edit documents while maintaining consistency across distributed nodes.
+
 
 This submission is a working **skeleton** of a distributed real-time collaboration platform with:
 
@@ -21,17 +24,37 @@ This submission is a working **skeleton** of a distributed real-time collaborati
   - Sanitizes input to avoid repeating or adding timestamps/author metadata.
   - Provides deterministic generation settings to avoid repetition.
 
-- A demo **Client** (`client/client_demo.py`) that demonstrates the full flow:
+- **Raft Consensus** (`raft/raft.py`):
+  - Leader election and replication - `RequestVote` and `AppendEntries` implemented.
+  - Persistent state (`currentTerm`, `votedFor`, `log[]`) stored in `states/raft_state_{port}.json`.
+  - Leader applies updates only after majority commit → **strong consistency**.
+
+
+- A demo **Client** that demonstrates the full flow:
   1. Login as `alice` (password `password`)
   2. Subscribe to presence updates
   3. Get `doc1`
   4. Lock `doc1`
   5. Post an edit
-  6. Ask LLM for a suggestion (rewrite/grammar/summarize)
+  6. Ask LLM for a suggestion to fix current text
   7. Display suggestion and prompt user Y/N to accept
   8. Apply suggestion if accepted
   9. Unlock and logout
+  10. Kill the current leader
+  11. Show new leader election process
+  12. Run client_demo.py again showing successful process again
 
+---
+Checklist
+
+* [x] gRPC framework used for all inter-service communication
+* [x] Raft consensus implemented — leader election, replication, failure detection
+* [x] LLM integration on a separate node (Flan-T5)
+* [x] Real-time presence & editing simulation
+* [x] Simplified distributed locking mechanism
+* [x] Version history with consistent replication
+* [x] Persistent recovery via state files
+* [x] Leader failover and continued operation after crash
 
 ---
 
@@ -46,7 +69,11 @@ cd aos-distributed-collab-tool
 
 uv sync
 
-python -m server.app_server
+python -m grpc_tools.protoc -I=proto --python_out=. --grpc_python_out=. proto/collab.proto
+
 python -m llm_server.llm_server
+python -m server.app_server -- port 50051
+python -m server.app_server -- port 50052
+python -m server.app_server -- port 50053
 python -m client.client_demo
 ```
