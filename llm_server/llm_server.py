@@ -49,11 +49,11 @@ def sanitize_input_text(text: str) -> str:
 def build_prompt(mode: str, text: str) -> str:
     text = sanitize_input_text(text)
     if mode == "grammar":
-        return f"Correct and polish the grammar of the following text. Do NOT add timestamps or author names. Keep meaning unchanged.\n\nText:\n{text}\n\nCorrected:"
+        return f"Correct and polish the grammar of the following text. Also correct spelling mistakes. Do NOT add timestamps or author names. Keep meaning unchanged.\n\nText:\n{text}\n\nCorrected:"
     if mode == "summarize":
         return f"Summarize the following text into 3 concise bullet points. Do NOT invent timestamps or author names.\n\n{text}\n\nSummary:"
     if mode == "rewrite":
-        return f"Rewrite the following text to be more formal and coherent. Do NOT add timestamps or author names. Preserve the meaning.\n\n{text}\n\nRewritten:"
+        return f"Rewrite the following text to be more formal and coherent. Do NOT add timestamps or author names. Preserve the meaning. ADD the word 'EDITED' to the end after you make the changes.\n\n{text}\n\nRewritten:"
     if mode == "qa":
         return text
     return f"Rewrite the following text:\n\n{text}\n\nRewritten:"
